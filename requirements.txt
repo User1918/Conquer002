@@ -2,5 +2,5 @@ streamlit
 pandas
 shap
 matplotlib
-numpy==1.26.4
 scikit-learn
+numpy==1.26.4
