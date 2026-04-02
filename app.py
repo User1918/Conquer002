@@ -52,63 +52,69 @@ elif choice == "SHAP Explanations":
     st.subheader("🧠 Model Interpretation")
     model_type = st.radio("Choose Model:", ["Logistic Regression (Kernel)", "Random Forest (Tree)"])
     
-    # 1. Select the correct SHAP values and Expected Value based on model
+    # 1. Selection Logic
     if "Logistic" in model_type:
         shap_vals = lr_res['shap_values_lr']
         base_val = lr_res.get('expected_value_lr', 0)
-        st.info("Explaining Logistic Regression")
     else:
         shap_vals = rf_res['shap_values_rf']
         base_val = rf_res.get('expected_value_rf', 0)
-        st.info("Explaining Random Forest")
 
-    # 2. Logic to handle 3D Arrays vs Lists (Binary Classification Fix)
-    # Tree SHAP often returns a list [class0, class1] or a 3D array (samples, features, outputs)
+    # 2. Extract specific class for Binary Classification
     if isinstance(shap_vals, list):
-        # It's a list, take the positive class (Attrition = Yes)
         shap_vals_to_plot = shap_vals[1]
-        if isinstance(base_val, (list, np.ndarray)) and len(base_val) > 1:
-            base_val = base_val[1]
+        actual_base_val = base_val[1] if isinstance(base_val, (list, np.ndarray)) else base_val
     elif len(np.shape(shap_vals)) == 3:
-        # It's a 3D array (samples, features, 2), slice for class 1
         shap_vals_to_plot = shap_vals[:, :, 1]
-        if isinstance(base_val, (list, np.ndarray)) and len(base_val) > 1:
-            base_val = base_val[1]
+        actual_base_val = base_val[1] if isinstance(base_val, (list, np.ndarray)) else base_val
     else:
-        # It's already 2D (samples, features)
         shap_vals_to_plot = shap_vals
+        actual_base_val = base_val
 
-    # Global Plot
-    st.write("### Global Feature Importance")
-    fig_global, ax_global = plt.subplots(figsize=(10, 6))
-    shap.summary_plot(shap_vals_to_plot, X_test, show=False)
-    st.pyplot(fig_global)
-    
-    st.divider()
-    
-    # Local Plot
-    st.write("### Local Prediction Explanation")
+    # 3. Row Selection & Prediction Display
     idx = st.number_input("Select Employee Row Index:", 0, len(X_test)-1, 0)
     
-    # DATA EXTRACTION FIX:
-    # Ensure row_shap and row_data are strictly 1D arrays of the same length
-    row_shap = np.array(shap_vals_to_plot[idx]).flatten()
-    row_data = X_test.iloc[idx].values.flatten()
+    # Get Actual Label from df_test
+    actual_label = df_test.iloc[idx]['Attrition']
+    label_text = "Yes (Left)" if actual_label == 1 else "No (Stayed)"
     
-    # Create the Explanation object correctly
-    exp = shap.Explanation(
-        values=row_shap,
-        base_values=float(base_val) if isinstance(base_val, (int, float, np.number)) else 0.0,
-        data=row_data,
-        feature_names=X_test.columns.tolist()
-    )
+    # Calculate Prediction based on SHAP sum
+    # Prediction = Base Value + Sum(SHAP Values)
+    row_shap = np.array(shap_vals_to_plot[idx]).flatten()
+    prediction_value = actual_base_val + np.sum(row_shap)
+    
+    # For Logistic/RF, if prediction_value > 0 (log-odds) or > 0.5 (prob), it's a "Yes"
+    # Note: Adjust threshold if your model uses a specific probability cutoff
+    pred_threshold = 0.5 if "Random" in model_type else 0.0
+    prediction_text = "Yes (Left)" if prediction_value > pred_threshold else "No (Stayed)"
 
-    # Use Waterfall for Tree models if you want, but Bar is also great
-    fig_local, ax_local = plt.subplots(figsize=(10, 5))
-    try:
+    # Display Metrics
+    col1, col2 = st.columns(2)
+    col1.metric("Actual Label", label_text)
+    col2.metric("Model Prediction", prediction_text, 
+               delta=f"{prediction_value:.2f} (Score)", 
+               delta_color="inverse" if actual_label != (prediction_value > pred_threshold) else "normal")
+
+    st.divider()
+
+    # 4. Plots
+    tab1, tab2 = st.tabs(["Local Bar Plot", "Global Summary"])
+    
+    with tab1:
+        st.write(f"### Explanation for Row {idx}")
+        row_data = X_test.iloc[idx].values.flatten()
+        exp = shap.Explanation(
+            values=row_shap,
+            base_values=float(actual_base_val),
+            data=row_data,
+            feature_names=X_test.columns.tolist()
+        )
+        fig_local, ax_local = plt.subplots(figsize=(10, 5))
         shap.plots.bar(exp, show=False)
         st.pyplot(fig_local)
-    except Exception as e:
-        st.error(f"Visualization error: {e}")
-        st.write("Falling back to text-based importance:")
-        st.write(pd.Series(row_shap, index=X_test.columns).sort_values(ascending=False))
+
+    with tab2:
+        st.write("### Global Feature Importance")
+        fig_global, ax_global = plt.subplots(figsize=(10, 6))
+        shap.summary_plot(shap_vals_to_plot, X_test, show=False)
+        st.pyplot(fig_global)
